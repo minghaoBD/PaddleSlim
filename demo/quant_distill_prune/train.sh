@@ -1,0 +1,18 @@
+python3.7 train.py \
+    --batch_size 64 \
+    --use_pact True \
+    --save_inference True \
+    --lr 0.005 \
+    --num_epochs 108 \
+    --data imagenet \
+    --log_period 100 \
+    --test_period 1 \
+    --model MobileNet \
+    --pretrained_model /root/paddlejob/workspace/env_run/models/pretrained_model/MobileNetV1_pretrained \
+    --step_epochs 71 88 \
+    --ratio 0.75 \
+    --stable_epochs 0 \
+    --pruning_epochs 54 \
+    --tunning_epochs 54 \
+    --pruning_steps 100 \
+    --initial_ratio 0.15
