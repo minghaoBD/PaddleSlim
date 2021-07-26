@@ -15,6 +15,7 @@ from paddleslim.core import GraphWrapper
 from GMP import GMP
 sys.path[0] = os.path.join(os.path.dirname("__file__"), os.path.pardir)
 import models
+import dali
 from utility import add_arguments, print_arguments, _download, _decompress
 from paddleslim.dist import merge, l2_loss, soft_label_loss, fsp_loss
 from paddleslim.quant import quant_aware, quant_post
@@ -150,6 +151,7 @@ def compress(args):
             image.stop_gradient = False
             label = paddle.static.data(
                 name='label', shape=[None, 1], dtype='int64')
+            
             train_loader = paddle.io.DataLoader(
                 train_dataset,
                 places=places,
@@ -169,6 +171,7 @@ def compress(args):
                 use_shared_memory=True,
                 batch_size=args.batch_size,
                 shuffle=False)
+            
             # model definition
             model = models.__dict__[args.model]()
             out = model.net(input=image, class_dim=class_dim)
@@ -391,7 +394,7 @@ def compress(args):
         if (epoch_id+1) % args.test_period == 0:
             test(epoch_id, val_program)
         if args.save_inference and (epoch_id+1) % args.model_period == 0:
-            fluid.io.save_params(executor=exe, dirname=args.model_path, main_program=val_program)
+            paddle.fluid.io.save_params(executor=exe, dirname=args.model_path, main_program=val_program)
 
 def main():
     args = parser.parse_args()

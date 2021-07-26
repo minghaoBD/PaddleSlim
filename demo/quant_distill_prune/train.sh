@@ -1,3 +1,5 @@
+export FLAGS_selected_gpus=0
+export FLAGS_fraction_of_gpu_memory_to_use=0.8
 python3.7 train.py \
     --batch_size 64 \
     --use_pact True \
