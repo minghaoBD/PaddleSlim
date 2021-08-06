@@ -14,6 +14,7 @@
 
 import numpy as np
 import paddle
+import paddle.fluid as fluid
 
 
 def merge(teacher_program,
@@ -24,7 +25,6 @@ def merge(teacher_program,
           name_prefix='teacher_'):
     """Merge teacher program into student program and add a uniform prefix to the
     names of all vars in teacher program
-
     Args:
         teacher_program(Program): The input teacher model paddle program 
         student_program(Program): The input student model paddle program
@@ -39,7 +39,6 @@ def merge(teacher_program,
                       will be used. Default: None
         name_prefix(str): Name prefix added for all vars of the teacher program.
                           Default: 'teacher_'
-
     Returns:
         None
     """
@@ -70,7 +69,10 @@ def merge(teacher_program,
             # student program add var
             new_var = student_program.global_block()._clone_variable(
                 teacher_var, force_persistable=False)
-            new_var.stop_gradient = True
+            if teacher_var.name.find('image') >= 0:
+                new_var.stop_gradient = False
+            else:
+                new_var.stop_gradient = True
 
     for block in teacher_program.blocks:
         for op in block.ops:
@@ -101,7 +103,6 @@ def fsp_loss(teacher_var1_name,
              student_var2_name,
              program=None):
     """Combine variables from student model and teacher model by fsp-loss.
-
     Args:
         teacher_var1_name(str): The name of teacher_var1.
         teacher_var2_name(str): The name of teacher_var2. Except for the
@@ -113,7 +114,6 @@ def fsp_loss(teacher_var1_name,
             be consistent with student_var1.
         program(Program): The input distiller program. If not specified,
                           the default program will be used. Default: None
-
     Returns:
         Variable: fsp distiller loss.
     """
@@ -135,13 +135,11 @@ def fsp_loss(teacher_var1_name,
 
 def l2_loss(teacher_var_name, student_var_name, program=None):
     """Combine variables from student model and teacher model by l2-loss.
-
     Args:
         teacher_var_name(str): The name of teacher_var.
         student_var_name(str): The name of student_var.
         program(Program): The input distiller program. If not specified,
                           the default program will be used. Default: None
-
     Returns: 
         Variable: l2 distiller loss.
     """
@@ -160,7 +158,6 @@ def soft_label_loss(teacher_var_name,
                     teacher_temperature=1.,
                     student_temperature=1.):
     """Combine variables from student model and teacher model by soft-label-loss.
-
     Args:
         teacher_var_name(str): The name of teacher_var.
         student_var_name(str): The name of student_var.
@@ -170,7 +167,6 @@ def soft_label_loss(teacher_var_name,
             teacher_feature_map before softmax. Default: 1.0
         student_temperature(float): Temperature used to divide 
             student_feature_map before softmax. Default: 1.0
-
     Returns:
         Variable: l2 distiller loss.
     """
@@ -192,12 +188,10 @@ def soft_label_loss(teacher_var_name,
 
 def loss(loss_func, program=None, **kwargs):
     """Combine variables from student model and teacher model by self defined loss.
-
     Args:
         program(Program): The input distiller program. If not specified,
                           the default program will be used. Default: None
         loss_func(function): The user self defined loss function. 
-
     Returns: 
         Variable: self defined distiller loss.
     """
@@ -211,4 +205,293 @@ def loss(loss_func, program=None, **kwargs):
         else:
             func_parameters.setdefault(item[0], item[1])
     loss = loss_func(**func_parameters)
+    return loss
+
+def hard_distill_loss(teacher_var_name,
+                      student_var_name,
+                      program,
+                      batch_size=32):
+    """ hard sample distill loss
+     Args:
+     teacher_var_name: name of taecher layer
+     student_var_name: name of student layer
+     program: program 
+     batch_size: batchsize
+     Return:
+         tensor: loss of hard sample
+    """
+    student_var = program.global_block().var(student_var_name)
+    teacher_var = program.global_block().var(teacher_var_name)
+    norm_teacher = fluid.layers.sqrt(
+            fluid.layers.reduce_sum(
+                 fluid.layers.square(teacher_var), dim=1))
+    norm_teacher = fluid.layers.elementwise_div(
+            teacher_var, norm_teacher, axis=0)
+    norm_teacher_T = fluid.layers.transpose(norm_teacher, perm=[1, 0])
+    
+    norm_student = fluid.layers.sqrt(
+            fluid.layers.reduce_sum(
+                      fluid.layers.square(student_var), dim=1))
+    norm_student = fluid.layers.elementwise_div(
+            student_var, norm_student, axis=0)
+    norm_student_T = fluid.layers.transpose(norm_student, perm=[1, 0])
+    cos_t = fluid.layers.abs(fluid.layers.mul(norm_teacher, norm_teacher_T))
+    cos_s = fluid.layers.abs(fluid.layers.mul(norm_student, norm_student_T))
+    diff = fluid.layers.abs(cos_s - cos_t)
+    diff = fluid.layers.reshape(diff, [1, -1])
+    N = batch_size // 4
+    out, idx = fluid.layers.topk(diff, k=N)
+    x = idx[0] / batch_size
+    y = idx[0] % batch_size
+    x = fluid.layers.reshape(x, [N, -1])
+    y = fluid.layers.reshape(y, [N, -1])
+    index_var = fluid.layers.concat(input=[x, y], axis=1)
+    index_var = fluid.layers.reshape(index_var, [-1])
+    index_var.stop_gradient = True
+    var_t = fluid.layers.gather(teacher_var, index_var)
+    var_s = fluid.layers.gather(student_var, index_var)
+    
+    loss = fluid.layers.reduce_mean(fluid.layers.square(var_t - var_s))
+    
+    return loss
+    
+def soft_hard_distill_loss(teacher_var_name,
+                           student_var_name,
+                           program,
+                           batch_size=32):
+    
+    """
+    soft hard sample distill loss with tanh function reweight
+    Args:
+    teacher_var_name: name of taecher layer
+    student_var_name: name of student layer
+    program: program 
+    batch_size: batchsize
+    Return:
+    tensor: loss of soft hard sample
+    """
+    student_var = program.global_block().var(student_var_name)
+    teacher_var = program.global_block().var(teacher_var_name)
+    norm_teacher = fluid.layers.sqrt(
+                     fluid.layers.reduce_sum(
+                           fluid.layers.square(teacher_var), dim=1))
+    norm_teacher = fluid.layers.elementwise_div(
+                     teacher_var, norm_teacher, axis=0)
+    norm_teacher_T = fluid.layers.transpose(norm_teacher, perm=[1, 0])
+    norm_student = fluid.layers.sqrt(
+                  fluid.layers.reduce_sum(
+                         fluid.layers.square(student_var), dim=1))
+    norm_student = fluid.layers.elementwise_div(
+                    student_var, norm_student, axis=0)
+    norm_student_T = fluid.layers.transpose(norm_student, perm=[1, 0])
+    cos_t = fluid.layers.abs(fluid.layers.mul(norm_teacher, norm_teacher_T))
+    cos_s = fluid.layers.abs(fluid.layers.mul(norm_student, norm_student_T))
+    diff = fluid.layers.abs(cos_s - cos_t)
+    diff = fluid.layers.reshape(diff, [1, -1])
+    N = batch_size // 4 * 3
+    out, idx = fluid.layers.argsort(diff, axis=-1)
+    x = idx[0] / batch_size
+    y = idx[0] % batch_size
+    x = fluid.layers.reshape(x, [batch_size, -1])
+    y = fluid.layers.reshape(y, [batch_size, -1])
+    index_var = fluid.layers.concat(input=[x, y], axis=1)
+    index_var = fluid.layers.reshape(index_var, [-1])
+    index_var.stop_gradient = True
+    
+    var_t = fluid.layers.gather(teacher_var, index_var)
+    var_s = fluid.layers.gather(student_var, index_var)
+    
+    id_batch = fluid.layers.range(0, batch_size, 1, 'int32')
+    weight_batch  = fluid.layers.tanh(id_batch - N) + 1.0
+    
+    square_diff = fluid.layers.square(var_t - var_s)
+    diff_mean = fluid.layers.reduce_mean(square_diff, axis=-1)
+    loss = weight_batch * diff_mean
+    return loss
+
+def RK_Angle(teacher_var_name, student_var_name, program, batch_size=32):
+    
+    """
+    angle-wise loss in relation knowledge distillation loss
+    args:
+    teacher_var_name, student_var_name, program, batch_size
+    return:
+    angle distill loss
+    """
+    student_var = program.global_block().var(student_var_name)
+    teacher_var = program.global_block().var(teacher_var_name)
+    teacher_a = fluid.layers.unsqueeze(teacher_var, axes=[0])
+    teacher_a = fluid.layers.expand(teacher_a, [batch_size, 1, 1])
+    teacher_b = fluid.layers.unsqueeze(teacher_var, axes=[1])
+    teacher_b = fluid.layers.expand(teacher_b, [1, batch_size, 1])
+    teacher_f =  fluid.layers.l2_normalize(teacher_a - teacher_b, axis = 2)
+    teacher_f_T = fluid.layers.transpose(teacher_f, perm=[0, 2, 1])
+    t_angle = fluid.layers.matmul(teacher_f, teacher_f_T)
+    t_angle = fluid.layers.flatten(t_angle, axis=0)
+    student_a = fluid.layers.unsqueeze(student_var, axes=[0])
+    student_a = fluid.layers.expand(student_a, [batch_size, 1, 1])
+    student_b = fluid.layers.unsqueeze(student_var, axes=[1])
+    student_b = fluid.layers.expand(student_b, [1, batch_size, 1])
+    student_f =  fluid.layers.l2_normalize(student_a - student_b, axis=2)
+    student_f_T = fluid.layers.transpose(student_f, perm=[0, 2, 1])
+    s_angle = fluid.layers.matmul(student_f, student_f_T)
+    s_angle = fluid.layers.flatten(s_angle, axis=0)
+    loss = fluid.layers.elementwise_sub(s_angle, t_angle)
+    loss = fluid.layers.abs(loss)
+    loss = fluid.layers.reduce_mean(loss)
+    return loss
+def pdist(input, batch_size=32, squared=False, eps=1e-12):
+    """
+    function to compute distance
+    """
+    e_square = fluid.layers.reduce_sum(fluid.layers.square(input), dim=-1)
+    e_a = fluid.layers.unsqueeze(e_square, axes=[1])
+    e_b = fluid.layers.unsqueeze(e_square, axes=[0])
+    input_t = fluid.layers.transpose(input, [1, 0])
+    prod = fluid.layers.mul(input, input_t)
+    e_a = fluid.layers.expand(e_a, [1, batch_size])
+    e_b = fluid.layers.expand(e_b, [batch_size, 1])
+    res = e_a + e_b - 2 * prod
+    res = fluid.layers.clip(res, min=eps, max=float('inf'))
+    if not squared:
+           res=fluid.layers.sqrt(res)
+    return res
+
+def RK_Distance(teacher_var_name, student_var_name, program, batch_size=32):
+    """
+    distance-wise loss in relation knowledge distillation loss
+    args:
+    teacher_var_name, student_var_name, program, batch_size 
+    return:
+    distance_wise distill loss
+    """
+    teacher_var = program.global_block().var(teacher_var_name)
+    student_var = program.global_block().var(student_var_name)
+
+    teacher_var = fluid.layers.flatten(teacher_var, axis=1)
+    student_var = fluid.layers.flatten(student_var, axis=1)
+
+    t_d = pdist(teacher_var, batch_size=batch_size, squared=False)
+    mean_td = fluid.layers.reduce_mean(t_d)
+    t_d = t_d / (mean_td + 1e-12)
+    t_d.stop_gradient = True
+    d = pdist(student_var, batch_size = batch_size, squared=False)
+    mean_d = fluid.layers.reduce_mean(d)
+    d = d / (mean_d + 1e-12)
+    loss = fluid.layers.smooth_l1(d, t_d)
+    loss = fluid.layers.reduce_mean(loss)
+    return loss
+
+def LodTensor_to_Tensor(lod_tensor):
+    """
+    Convert LodTensor to Tensor
+    """
+    lod = lod_tensor.lod()
+    array = np.array(lod_tensor)
+    new_array = []
+    for i in range(len(lod[0]) - 1):
+        new_array.append(array[lod[0][i]:lod[0][i + 1]])
+        
+    return new_array
+def to_lodtensor(data, place):
+    """
+    Convert Tensor to LodTensor
+    """
+    seq_lens = [len(seq) for seq in data]
+    cur_len = 0
+    lod = [cur_len]
+    for l in seq_lens:
+        cur_len += l
+        lod.append(cur_len)
+    flattened_data = np.concatenate(data, axis=0).astype("float32")
+    flattened_data = flattened_data.reshape([len(flattened_data), 1])
+    res = fluid.LoDTensor()
+    res.set(flattened_data, place)
+    res.set_lod([lod])
+    return res
+def attention_new(tensor1, tensor2):
+    """
+    tensor1:(N, C, H, W)
+    tensor2:(N, C, H, W)
+    """
+    tensor1 = fluid.layers.transpose(tensor1, perm=[0, 2, 3, 1])
+    query = fluid.layers.reshape(tensor1, shape=[tensor1.shape[0], -1, tensor1.shape[3]])
+    query = fluid.layers.l2_normalize(query, axis = -1)
+    
+    key = fluid.layers.reshape(tensor2, shape=[tensor2.shape[0], tensor2.shape[1], -1])
+    key = fluid.layers.l2_normalize(key, axis = -2)
+    value = query
+    cos = fluid.layers.matual(query, key)
+    attention_f = fluid.layers.matmul(fluid.layers.softmax(cos), value)
+    return attention_f
+def attention_margin_feature(tensor1, tensor2, margin=False):
+    """
+    the attention approach used in transformer
+    input tensor1: Query, Value, shape (1, C, H, W)
+    input tensor2: Key, shape(1, C, H, W)
+    return attention feature
+    """
+    tensor1 = fluid.layers.transpose(tensor1, perm=[0, 2, 3, 1])
+    query = fluid.layers.reshape(tensor1, shape=[-1, tensor1.shape[3]])
+    query = fluid.layers.l2_normalize(query, axis = -1)
+    
+    tensor2 = fluid.layers.transpose(tensor2, perm=[0, 2, 3, 1])
+    key = fluid.layers.reshape(tensor2, shape=[-1, tensor2.shape[3]])
+    key = fluid.layers.l2_normalize(key, axis = -1)
+    key =  fluid.layers.transpose(query, perm=[1, 0])
+    value = query
+    cos = fluid.layers.mul(query, key)
+    if margin:
+       theta = fluid.layers.acos(cos)
+       margin_cos = fluid.layers.cos(theta + 0.5)
+    else:
+       margin_cos = cos
+    attention_f = fluid.layers.mul(fluid.layers.softmax(margin_cos), value)
+    return attention_f
+def transformer_attention(tensor):
+    """
+    the attention approach used in transformer
+    input tensor: Q, K, V, shape (1, C, H, W)
+    return attention feature
+    """
+    tensor = fluid.layers.transpose(tensor, perm=[0, 2, 3, 1])
+    query = fluid.layers.reshape(tensor, shape=[-1, tensor.shape[3]])
+    query = fluid.layers.l2_normalize(query, axis = -1)
+    key =  fluid.layers.transpose(query, perm=[1, 0])
+    value = query
+    attention_f = fluid.layers.mul(fluid.layers.softmax(fluid.layers.mul(query, key)), value)
+    return attention_f
+def Local_Region_distill_loss(teacher_var_name, student_var_name, s_ROIs, t_ROIs, program, batch_size=8):
+    
+    """
+    Local region distill loss definition, mainly for detection task
+    This distill loss is mainly used for detection task, the local region is more useful in detection task
+    args:
+    teacher_var_name : the teacher feature map name, N*C*H*W
+    student_var_name : the student feature map name, N*C*H*W
+    s_ROIs : the teacher object score map
+    t_ROIs : the student object score map
+    program: the train program
+    """
+    teacher_var = program.global_block().var(teacher_var_name)
+    student_var = program.global_block().var(student_var_name)
+    loss_region = fluid.layers.reduce_mean(fluid.layers.square(student_rois_tensor - teacher_rois_tensor))
+    """
+    add relationship of the object based on transformer model attention mechnism softmax(Q*K)*V
+    """
+    loss_relation =[]
+    for i in range(batch_size):
+        idx = np.array(i)
+        idx_tensor=fluid.layers.create_tensor(dtype='int32')
+        idx = idx.astype('int32')
+        fluid.layers.assign(idx, idx_tensor)
+        idx_tensor = fluid.layers.reshape(idx_tensor, shape=[-1, 1])
+        idx_tensor.stop_gradient = True
+        t_f = fluid.layers.gather_nd(teacher_var, idx_tensor)
+        s_f = fluid.layers.gather_nd(student_var, idx_tensor)
+        attention_t = transformer_attention(t_f)
+        attention_s = transformer_attention(s_f)
+        loss_relation.append(fluid.layers.reduce_mean(fluid.layers.square(attention_t - attention_s)))
+    loss_relation = fluid.layers.sum(loss_relation)
+    loss = loss_region + loss_relation
     return loss
