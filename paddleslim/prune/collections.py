@@ -212,6 +212,7 @@ class PruningCollections(object):
                                      skip_stranger=skip_stranger)
             else:
                 cls = PRUNE_WORKER.get(target_op.type())
+                print(target_op.type())
                 if cls is None:
                     _logger.warning("No worker for operator: {}".format(
                         target_op.type()))

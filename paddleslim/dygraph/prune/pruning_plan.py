@@ -56,7 +56,6 @@ class PruningPlan():
         self._pruned_flops = value
 
     def add(self, var_name, pruning_mask):
-
         assert (isinstance(pruning_mask, PruningMask))
         if var_name not in self._masks:
             self._masks[var_name] = []

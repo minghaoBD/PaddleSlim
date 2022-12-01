@@ -24,7 +24,7 @@ _logger = get_logger(__name__, level=logging.INFO)
 
 PRUNE_WORKER = Registry('prune_worker')
 
-SKIPPED_OPS = ['shape', 'reduce_mean']
+SKIPPED_OPS = ['shape', 'reduce_mean', 'assign', 'concat']
 
 # operators in OPS_UNCHANGE_SHAPE will be visited by default worker
 # who keep shape of output same with shape of input.
@@ -44,6 +44,7 @@ OPS_UNCHANGE_SHAPE += [
     'fused_softmax_mask_upper_triangle',
     'softmax',
     'hard_sigmoid',
+    'assign',
 ]
 
 
@@ -112,10 +113,14 @@ class PruneWorker(object):
             raise UnsupportOpError("Variable {} was skipped.".format(var.name(
             )))
         pre_ops = var.inputs()
+        #print('pre ops: ', pre_ops)
         for op in pre_ops:
+            if op.type() == 'while': continue
             self._prune_op(op, var, axis, transforms)
         next_ops = var.outputs()
+        #print('next ops: ', next_ops)
         for op in next_ops:
+            if op.type() == 'while': continue
             self._prune_op(op, var, axis, transforms)
 
     def _prune(self, var, pruned_axis, transforms):
@@ -232,15 +237,11 @@ class reshape2(PruneWorker):
         shape = self.op.attr("shape")
         assert self._valid_reshape2(
             shape), "we don't support the shape {} in pruning".format(shape)
-        # assert self._valid_pruned_axis(shape, pruned_axis), "we don't support pruned axis is {} when shape is changing from {} to {}".format(pruned_axis, in_shape, out_shape)
         self.append_pruned_vars(xshape_var, pruned_axis + 1, transforms)
         if var in self.op.inputs("X"):
             if (len(out_shape) > len(in_shape)):
-                #self.op.set_attr('shape',
-                #                 [0, 0, int(shape[2] * 0.875), shape[3]])
                 transform = {"squeeze": out_shape[pruned_axis + 1]}
             elif (len(out_shape) < len(in_shape)):
-                # self.op.set_attr('shape', [0, 0, int(shape[2] * 0.875)])
                 transform = {"repeat": in_shape[pruned_axis + 1]}
             else:
                 transform = {}
@@ -248,11 +249,8 @@ class reshape2(PruneWorker):
                                    transforms + [transform])
         elif var in self.op.outputs("Out"):
             if (len(in_shape) > len(out_shape)):
-                # self.op.set_attr('shape', [0, 0, int(shape[2] * 0.875)])
                 transform = {"squeeze": in_shape[pruned_axis + 1]}
             elif (len(in_shape) < len(in_shape)):
-                #self.op.set_attr('shape',
-                #                  [0, 0, int(shape[2] * 0.875), shape[3]])
                 transform = {"repeat": out_shape[pruned_axis + 1]}
             else:
                 transform = {}
@@ -836,6 +834,7 @@ class matmul(PruneWorker):
             mappings = [(x_shape_len - 2, -1, x_shape_len - 2),
                         (x_shape_len - 1, x_shape_len - 2, -1),
                         (-1, x_shape_len - 1, x_shape_len - 1)]
+        #print(mappings, var, x, y, out)
         if var == x:
             for x_i, y_i, out_i in mappings:
                 if pruned_axis == x_i:

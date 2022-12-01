@@ -9,6 +9,7 @@ from paddle.fluid.dygraph.base import program_desc_tracing_guard, _switch_declar
 from paddle.fluid.dygraph.layers import Layer
 from paddle.fluid.framework import Block, ParamBase, Program, Variable
 from ..common import get_logger
+import copy
 
 __all__ = ["dygraph2program"]
 
@@ -135,15 +136,16 @@ def dygraph2program(layer,
                     tmp_prefix='t_',
                     extract_inputs_fn=None,
                     extract_outputs_fn=None,
-                    dtypes=None):
-    print(type(layer))
+                    dtypes=None,
+                    input_spec=[]):
     assert isinstance(layer, Layer)
     extract_inputs_fn = extract_inputs_fn if extract_inputs_fn is not None else extract_vars
     extract_outputs_fn = extract_outputs_fn if extract_outputs_fn is not None else extract_vars
 
     if in_dygraph_mode():
         return _dy2prog(layer, inputs, feed_prefix, fetch_prefix, tmp_prefix,
-                        extract_inputs_fn, extract_outputs_fn, dtypes)
+                        extract_inputs_fn, extract_outputs_fn, dtypes,
+                        input_spec)
 
     tracer = _dygraph_tracer()._get_program_desc_tracer()
 
@@ -183,10 +185,14 @@ def _dy2prog(layer,
              tmp_prefix='t_',
              extract_inputs_fn=None,
              extract_outputs_fn=None,
-             dtypes=None):
+             dtypes=None,
+             input_spec=[]):
     """
     Tracing program in Eager Mode.
     """
+    static_model = paddle.jit.to_static(layer, input_spec)
+    return static_model.forward.main_program
+    '''
     paddle.enable_static()
     program = Program()
     # convert ParamBase into Parameter automatically by _switch_declarative_mode_guard_
@@ -198,11 +204,12 @@ def _dy2prog(layer,
             inputs = _create_tensors(inputs, dtypes=dtypes, is_static=True)
         else:
             inputs = to_variables(inputs, is_static=True)
+
         if isinstance(inputs, list):
             outputs = layer(*inputs)
         else:
             outputs = layer(inputs)
 
     paddle.disable_static()
-
     return program
+    '''

@@ -20,7 +20,8 @@ class L2NormFilterPruner(FilterPruner):
                  skip_leaves=True,
                  prune_type='conv',
                  input_dtype="float32",
-                 num_head=-1):
+                 num_head=-1,
+                 input_spec=[]):
         super(L2NormFilterPruner, self).__init__(
             model,
             inputs,
@@ -29,7 +30,8 @@ class L2NormFilterPruner(FilterPruner):
             skip_leaves=skip_leaves,
             prune_type=prune_type,
             input_dtype=input_dtype,
-            num_head=num_head)
+            num_head=num_head,
+            input_spec=input_spec)
 
     def cal_mask(self, pruned_ratio, collection, num_head=-1):
         var_name = collection.master_name

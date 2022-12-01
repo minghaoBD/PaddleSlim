@@ -66,7 +66,8 @@ class FilterPruner(Pruner):
                  skip_leaves=True,
                  prune_type='conv',
                  num_head=-1,
-                 input_dtype='float32'):
+                 input_dtype='float32',
+                 input_spec=[]):
         super(FilterPruner, self).__init__(model, inputs, opt=opt)
 
         self.num_head = num_head
@@ -80,8 +81,8 @@ class FilterPruner(Pruner):
             inputs,
             skip_leaves=self.skip_leaves,
             prune_type=prune_type,
-            input_dtype=input_dtype)
-
+            input_dtype=input_dtype,
+            input_spec=input_spec)
         # skip vars in:
         # 1. depthwise conv2d layer
         self.skip_vars = []
@@ -357,7 +358,9 @@ class FilterPruner(Pruner):
             current_mask = src_mask
             groups = _detail.op.attr('groups')
             if groups is None or groups == 1:
-                assert len(current_mask) == var_shape[
+                assert var_shape[_detail.axis] == -1 or len(
+                    current_mask
+                ) == var_shape[
                     _detail.
                     axis], f"The length of current_mask must be equal to the size of dimension to be pruned on. But get: len(current_mask): {len(current_mask)}; var_shape: {var_shape}; axis: {_detail.axis}; var name: {_detail.name}; len(mask): {len(mask)}"
             plan.add(_detail.name,
