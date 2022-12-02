@@ -353,11 +353,13 @@ class FilterPruner(Pruner):
             # Varibales can be pruned on multiple axies. 
             src_mask = copy.deepcopy(mask)
             var_shape = _detail.var.shape()
+            print(_detail.transform)
             for tran in _detail.transform:
                 src_mask = self._transform_mask(src_mask, tran)
             current_mask = src_mask
             groups = _detail.op.attr('groups')
             if groups is None or groups == 1:
+                print(_detail.name, len(current_mask), _detail.axis, _detail.op)
                 assert var_shape[_detail.axis] == -1 or len(
                     current_mask
                 ) == var_shape[

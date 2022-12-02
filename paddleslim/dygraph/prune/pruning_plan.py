@@ -62,6 +62,7 @@ class PruningPlan():
         if var_name not in self._dims:
             self._dims[var_name] = []
 
+        if 'reshape' in var_name: return
         if pruning_mask.dims in self._dims[var_name]:
             for _mask in self._masks[var_name]:
                 if pruning_mask.dims == _mask.dims:

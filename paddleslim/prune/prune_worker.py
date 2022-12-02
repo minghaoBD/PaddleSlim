@@ -14,6 +14,7 @@
 
 import os
 import logging
+import sys
 import numpy as np
 from ..core import Registry
 from ..common import get_logger
@@ -149,6 +150,7 @@ class PruneWorker(object):
         _logger.debug(
             f"visit {op.type()} by var [{var.name()}] on axis [{pruned_axis}];\t visited={self.visited}\n"
         )
+        # print('next: ', cls, self.visited)
         worker = cls(op, self.pruned_params, self.visited, self.skip_stranger)
         worker.skip_vars = self.skip_vars
         worker.prune(var, pruned_axis, transforms)
@@ -241,6 +243,9 @@ class reshape2(PruneWorker):
         if var in self.op.inputs("X"):
             if (len(out_shape) > len(in_shape)):
                 transform = {"squeeze": out_shape[pruned_axis + 1]}
+                if out_shape[pruned_axis + 1] == 64:
+                    print(var, shape, 'in -> out')
+                    sys.exit()
             elif (len(out_shape) < len(in_shape)):
                 transform = {"repeat": in_shape[pruned_axis + 1]}
             else:
@@ -248,8 +253,12 @@ class reshape2(PruneWorker):
             self._visit_and_search(out_var, pruned_axis,
                                    transforms + [transform])
         elif var in self.op.outputs("Out"):
+            return
             if (len(in_shape) > len(out_shape)):
                 transform = {"squeeze": in_shape[pruned_axis + 1]}
+                if in_shape[pruned_axis + 1] == 64:
+                    print(var, shape, 'out -> in')
+                    sys.exit()
             elif (len(in_shape) < len(in_shape)):
                 transform = {"repeat": out_shape[pruned_axis + 1]}
             else:
